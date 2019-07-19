@@ -232,6 +232,26 @@ def render_layer(layer, resources_dirname):
             image_custom.save(os.path.join(DEBUG_DIRNAME, "text_" + text + "_custom.png"))
         image = np.array(image_custom)
 
+    elif layer_type == "concat":
+        axis = layer["axis"]
+        sub_layers = layer["layers"]
+        sub_layer_images = [render_layer(x, resources_dirname) for x in sub_layers]
+        print("concatenating shapes", [x.shape for x in sub_layer_images], "...", end="", flush=True)
+        expand_axis = 1 if axis == 0 else 0
+        # add extra at the right or bottom
+        # adding at bottom makes sense for text (main use case)
+        max_dim = max([x.shape[expand_axis] for x in sub_layer_images])
+        sub_layer_images_resized = []
+        for sub_layer_image in sub_layer_images:
+            if axis == 1:
+                new_x = sub_layer_image.shape[1]
+                new_y = max_dim
+            else:
+                new_x = max_dim
+                new_y = sub_layer_image.shape[0]
+            sub_layer_images_resized.append(expand_down_right(sub_layer_image, new_x, new_y))
+        print([x.shape for x in sub_layer_images])
+        image = np.concatenate(sub_layer_images_resized, axis=axis)
     else:
         image = None
 
@@ -338,7 +358,14 @@ def expand_border(image, border_x, border_y):
     lim_x = res.shape[1] - border_x if border_x > 0 else res.shape[1]
 
     res[border_y:lim_y, border_x:lim_x] = image
-    return np.array(res)
+    return res
+
+
+def expand_down_right(image, new_x, new_y):
+    res = Image.new("RGBA", (new_x, new_y), (255, 255, 255, 0))
+    res = np.array(res)
+    res[0:image.shape[0], 0:image.shape[1]] = image
+    return res
 
 
 def blend(image, opacity):
