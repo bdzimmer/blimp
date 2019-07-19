@@ -25,8 +25,7 @@ def main(argv):
     # TODO: command line parameters
     save_layer = True
     save_total = False
-
-    start_time = time.time()
+    interactive = False
 
     # TODO: debug should be commandline parameter
     if DEBUG:
@@ -35,18 +34,70 @@ def main(argv):
     input_filename = argv[1]
     project_dirname = os.path.splitext(input_filename)[0]
 
-    with open(input_filename, "r") as input_file:
-        config = json.load(input_file)
-
-    resources_dirname = config["resources_dirname"]
-    canvas_width = config["width"]
-    canvas_height = config["height"]
-
     os.makedirs(project_dirname, exist_ok=True)
 
-    res = Image.new("RGB", (canvas_width, canvas_height), (255, 255, 255))
+    if interactive:
 
-    for layer_idx, layer in enumerate(config["layers"]):
+        cv2.namedWindow("final", cv2.WINDOW_NORMAL)
+
+        while True:
+
+            try:
+                with open(input_filename, "r") as input_file:
+                    config = json.load(input_file)
+                canvas_width = config["width"]
+                canvas_height = config["height"]
+                resources_dirname = config["resources_dirname"]
+
+                start_time = time.time()
+                res = assemble_group(
+                    config["layers"], canvas_width, canvas_height, resources_dirname, False,
+                    save_layer, save_total, project_dirname, prefix="")
+
+                end_time = time.time()
+                total_time = end_time - start_time
+                print("total time:", round(total_time, 3), "sec")
+
+                res_cv2 = res[:, :, [2, 1, 0]]
+                res_cv2 = cv2.resize(res_cv2, (int(canvas_width / 4), int(canvas_height / 4)))
+                cv2.imshow("final", res_cv2)
+                cv2.waitKey(2000)
+            except Exception as e:
+                print(e)
+
+    else:
+        with open(input_filename, "r") as input_file:
+            config = json.load(input_file)
+        canvas_width = config["width"]
+        canvas_height = config["height"]
+        resources_dirname = config["resources_dirname"]
+
+        start_time = time.time()
+        res = assemble_group(
+            config["layers"], canvas_width, canvas_height, resources_dirname, False,
+            save_layer, save_total, project_dirname, prefix="")
+
+        Image.fromarray(res).save(
+            os.path.join(
+                project_dirname, "final.png"))
+
+        end_time = time.time()
+        total_time = end_time - start_time
+        print("total time:", round(total_time, 3), "sec")
+
+
+def assemble_group(
+        layers, canvas_width, canvas_height, resources_dirname, canvas_alpha,
+        save_layer, save_total, project_dirname, prefix):
+
+    start_time = time.time()
+
+    if canvas_alpha:
+        res = Image.new("RGBA", (canvas_width, canvas_height), (255, 255, 255, 0))
+    else:
+        res = Image.new("RGBA", (canvas_width, canvas_height), (255, 255, 255, 255))
+
+    for layer_idx, layer in enumerate(layers):
         print("layer", layer_idx, "...", end="", flush=True)
 
         # ~~~~ render
@@ -65,7 +116,14 @@ def main(argv):
         # ~~~~ apply effects
 
         for effect_idx, effect in enumerate(layer.get("effects", [])):
-            layer_image = apply_effect(layer_image, effect)
+            layer_image = apply_effect(layer_image, effect, resources_dirname)
+
+        # ~~~~ apply mask
+
+        mask_layer = layer.get("mask", None)
+        if mask_layer is not None:
+            mask_layer_image = render_layer(mask_layer, resources_dirname)
+            layer_image[:, :, 3] = mask_layer_image[:, :, 3]
 
         # ~~~~ calculate position and trim
 
@@ -88,7 +146,7 @@ def main(argv):
             image_pil = Image.fromarray(layer_image_trimmed)
             image_pil.save(
                 os.path.join(
-                    project_dirname, "layer_" + str(layer_idx).rjust(3, "0") + ".png"))
+                    project_dirname, "layer_" + prefix + str(layer_idx).rjust(3, "0") + ".png"))
 
         # ~~~~ apply opacity and accumulate
 
@@ -98,23 +156,18 @@ def main(argv):
             layer_image_trimmed = blend(layer_image_trimmed, opacity)
 
         image_pil = Image.fromarray(layer_image_trimmed)
-        res.paste(image_pil, (layer_x - border_x, layer_y - border_y), image_pil)
+        # res.paste(image_pil, (layer_x - border_x, layer_y - border_y), image_pil)
+        res.alpha_composite(image_pil, (layer_x - border_x, layer_y - border_y))
 
         if save_total:
             res.save(
                 os.path.join(
-                    project_dirname, "total_" + str(layer_idx).rjust(3, "0") + ".png"))
+                    project_dirname, "total_" + prefix + str(layer_idx).rjust(3, "0") + ".png"))
 
         cur_time = time.time() - start_time
         print("done", round(cur_time, 3), "sec")
 
-    res.save(
-        os.path.join(
-            project_dirname, "final.png"))
-
-    end_time = time.time()
-    total_time = end_time - start_time
-    print("total time:", round(total_time, 3), "sec")
+    return np.array(res)
 
 
 def text_custom_kerning(text, font, color, kern_add):
@@ -185,28 +238,25 @@ def render_layer(layer, resources_dirname):
     if layer_type == "image":
         filename = layer["filename"]
 
-        image_pil = Image.open(
-            os.path.join(resources_dirname, filename))
-        image = np.array(image_pil)
-        if image.shape[2] == 3:
-            image = add_alpha(image)
+        image = load_image(os.path.join(resources_dirname, filename))
 
     elif layer_type == "gaussian":
         width = layer["width"]
         height = layer["height"]
-        a = layer["a"]
-        x = layer.get("x", width * 0.5)
-        y = layer.get("y", height * 0.5)
+        a = layer.get("a", 255)
+        mu_x = layer.get("mu_x", width * 0.5)
+        mu_y = layer.get("mu_y", height * 0.5)
         sigma_x = layer.get("sigma_x", width * 0.75)
         sigma_y = layer.get("sigma_y", height * 0.75)
         transparent = layer.get("transparent", True)
+        invert = layer.get("invert", False)
 
         d_x = 2.0 * sigma_x * sigma_x
         d_y = 2.0 * sigma_y * sigma_y
         ivals = np.tile(np.arange(height).reshape(-1, 1), (1, width))
         jvals = np.tile(np.arange(width), (height, 1))
         image = a * np.exp(
-            0.0 - (((ivals - y) ** 2) / d_y + ((jvals - x) ** 2) / d_x))
+            0.0 - (((ivals - mu_y) ** 2) / d_y + ((jvals - mu_x) ** 2) / d_x))
         image = np.clip(image, 0.0, 255.0)
         image = np.array(image, dtype=np.ubyte)
 
@@ -216,6 +266,9 @@ def render_layer(layer, resources_dirname):
         else:
             image = np.stack((image, image, image), axis=2)
             image = add_alpha(image)
+
+        if invert:
+            image = 255 - image
 
     elif layer_type == "text":
         font_filename = layer["font"]
@@ -235,6 +288,7 @@ def render_layer(layer, resources_dirname):
     elif layer_type == "concat":
         axis = layer["axis"]
         sub_layers = layer["layers"]
+
         sub_layer_images = [render_layer(x, resources_dirname) for x in sub_layers]
         print("concatenating shapes", [x.shape for x in sub_layer_images], "...", end="", flush=True)
         expand_axis = 1 if axis == 0 else 0
@@ -252,6 +306,16 @@ def render_layer(layer, resources_dirname):
             sub_layer_images_resized.append(expand_down_right(sub_layer_image, new_x, new_y))
         print([x.shape for x in sub_layer_images])
         image = np.concatenate(sub_layer_images_resized, axis=axis)
+
+    elif layer_type == "group":
+        sub_layers = layer["layers"]
+        width = layer["width"]
+        height = layer["height"]
+
+        image = assemble_group(
+            sub_layers, width, height, resources_dirname, True,
+            False, False, None, None)
+
     else:
         image = None
 
@@ -274,9 +338,20 @@ def memoize(fn):
 
 
 @memoize
-def load_font(font_filename, font_size):
+def load_font(filename, font_size):
     """load a font"""
-    return ImageFont.truetype(font_filename, font_size)
+    return ImageFont.truetype(filename, font_size)
+
+
+@memoize
+def load_image(filename):
+    """load an image"""
+    print("loading", filename, "from disk")
+    image_pil = Image.open(filename)
+    image = np.array(image_pil)
+    if image.shape[2] == 3:
+        image = add_alpha(image)
+    return image
 
 
 def add_alpha(image):
@@ -310,15 +385,17 @@ def trim(layer_image, layer_x, layer_y, canvas_width, canvas_height):
     return layer_image[start_y:end_y, start_x:end_x, :], layer_x, layer_y
 
 
-def apply_effect(image, effect):
+def apply_effect(image, effect, resources_dirname):
     """layer effects!"""
     effect_type = effect["type"]
 
     if effect_type == "flip_ud":
         image = np.array(Image.fromarray(image).transpose(Image.FLIP_TOP_BOTTOM))
+
     elif effect_type == "blend":
         opacity = effect["opacity"]
         image = blend(image, opacity)
+
     elif effect_type == "glow":
         dilate_size = effect.get("dilate", 16)
         blur_size = effect.get("blur", 127)
@@ -335,6 +412,18 @@ def apply_effect(image, effect):
         glow = Image.fromarray(glow)
         glow.paste(Image.fromarray(image), (0, 0), Image.fromarray(image))
         image = np.array(glow)
+
+    elif effect_type == "mask_onto":
+        layer = dict(effect["layer"])
+
+        layer["width"] = layer.get("width", image.shape[1])
+        layer["height"] = layer.get("height", image.shape[0])
+        effect_layer = render_layer(layer, resources_dirname)
+        effect_layer[:, :, 3] = image[:, :, 3]
+        image_pil = Image.fromarray(image)
+        image_pil.alpha_composite(Image.fromarray(effect_layer))
+        image = np.array(image_pil)
+
     else:
         print("\tunrecognized effect type '" + str(effect_type) + "'")
 
@@ -348,10 +437,6 @@ def expand_border(image, border_x, border_y):
         "RGBA",
         (image.shape[1] + 2 * border_x, image.shape[0] + 2 * border_y),
         (255, 255, 255, 0))
-
-    # not sure why this doesn't work
-    # mask = Image.fromarray(image)
-    # res.paste(image, (border_x, border_y), mask)
 
     res = np.array(res)
     lim_y = res.shape[0] - border_y if border_y > 0 else res.shape[0]
@@ -370,6 +455,8 @@ def expand_down_right(image, new_x, new_y):
 
 def blend(image, opacity):
     """change the opacity of an image"""
+    if image.shape[2] == 3:
+        image = add_alpha(image)
     transparent = Image.new("RGBA", (image.shape[1], image.shape[0]), (255, 255, 255, 0))
     return np.array(Image.blend(transparent, Image.fromarray(image), opacity))
 
