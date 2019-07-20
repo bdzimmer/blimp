@@ -77,9 +77,14 @@ def main(argv):
             config["layers"], canvas_width, canvas_height, resources_dirname, False,
             save_layer, save_total, project_dirname, prefix="")
 
-        Image.fromarray(res).save(
+        Image.fromarray(res[:, :, 0:3]).save(
             os.path.join(
-                project_dirname, "final.png"))
+                project_dirname, project_dirname + ".png"))
+                
+        if True:
+            Image.fromarray(res[:, :, 0:3]).save(
+                os.path.join(
+                    project_dirname, project_dirname + ".jpg"))
 
         end_time = time.time()
         total_time = end_time - start_time
