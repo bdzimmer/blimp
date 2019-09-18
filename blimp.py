@@ -60,6 +60,7 @@ def main(argv):
 
                 res_cv2 = res[:, :, [2, 1, 0]]
                 res_cv2 = cv2.resize(res_cv2, (int(canvas_width / 4), int(canvas_height / 4)))
+                cv2.resizeWindow("final", (res_cv2.shape[1], res_cv2.shape[0]))
                 cv2.imshow("final", res_cv2)
                 cv2.waitKey(2000)
             except Exception as e:
@@ -80,7 +81,7 @@ def main(argv):
         Image.fromarray(res[:, :, 0:3]).save(
             os.path.join(
                 project_dirname, project_dirname + ".png"))
-                
+
         if True:
             Image.fromarray(res[:, :, 0:3]).save(
                 os.path.join(
@@ -428,6 +429,12 @@ def apply_effect(image, effect, resources_dirname):
         image_pil = Image.fromarray(image)
         image_pil.alpha_composite(Image.fromarray(effect_layer))
         image = np.array(image_pil)
+
+    elif effect_type == "scale":
+        x_scale = effect.get("x", 1.0)
+        y_scale = effect.get("y", 1.0)
+        image = cv2.resize(
+            image, (int(x_scale * image.shape[1]), int(y_scale * image.shape[0])))
 
     else:
         print("\tunrecognized effect type '" + str(effect_type) + "'")
