@@ -469,9 +469,13 @@ def blend(image, opacity):
     """change the opacity of an image"""
     if image.shape[2] == 3:
         image = add_alpha(image)
-    transparent = Image.new("RGBA", (image.shape[1], image.shape[0]), (255, 255, 255, 0))
-    return np.array(Image.blend(transparent, Image.fromarray(image), opacity))
+    else:
+        image = np.copy(image)
+    # transparent = Image.new("RGBA", (image.shape[1], image.shape[0]), (255, 255, 255, 0))
+    # return np.array(Image.blend(transparent, Image.fromarray(image), opacity))
 
+    image[:, :, 3] = int(opacity * 255)
+    return image
 
 if __name__ == "__main__":
     main(sys.argv)
