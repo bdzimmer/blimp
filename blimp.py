@@ -474,8 +474,9 @@ def blend(image, opacity):
     # transparent = Image.new("RGBA", (image.shape[1], image.shape[0]), (255, 255, 255, 0))
     # return np.array(Image.blend(transparent, Image.fromarray(image), opacity))
 
-    image[:, :, 3] = int(opacity * 255)
+    image[:, :, 3] = image[:, :, 3] * opacity
     return image
+
 
 if __name__ == "__main__":
     main(sys.argv)
